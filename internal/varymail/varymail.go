@@ -18,8 +18,8 @@ import (
 // DefaultBaseURL vary.email 开放 API 根地址。
 const DefaultBaseURL = "https://vary.email"
 
-// DefaultServiceName 固定使用的服务名（接收 ChatGPT/OpenAI 验证码）。
-const DefaultServiceName = "chatgpt"
+// DefaultServiceName 固定使用的服务名（接收 Grok/x.ai 验证码，vary.email 上名为 xAI）。
+const DefaultServiceName = "xai"
 
 // 已知业务错误，供上层区分处理。
 var (
@@ -27,7 +27,7 @@ var (
 	ErrNoBalance    = errors.New("varymail: 余额不足，请先充值")
 	ErrOutOfStock   = errors.New("varymail: 该服务暂时无可用邮箱")
 	ErrPickup       = errors.New("varymail: 取件失败，邮箱可能已失效")
-	ErrNoService    = errors.New("varymail: 店铺内未找到 chatgpt 服务")
+	ErrNoService    = errors.New("varymail: 店铺内未找到 xai 服务")
 )
 
 // Client vary.email API 客户端。

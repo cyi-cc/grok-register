@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>邮箱管理 · ChatGPT 注册管理</title>
+<title>邮箱管理 · Grok 注册管理</title>
 <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body data-page="mailboxes">
@@ -12,6 +12,11 @@
     <h1 class="page-title">邮箱管理</h1>
     <div class="toolbar">
       <input id="mb-search" class="px-input search" placeholder="搜索 email / 备注 ...">
+      <select id="mb-source-filter" class="px-input">
+        <option value="">全部来源</option>
+        <option value="local">本地邮箱</option>
+        <option value="varymail">vary 邮箱</option>
+      </select>
       <select id="mb-filter" class="px-input">
         <option value="">全部状态</option>
         <option value="unverified">待验证</option>
@@ -28,7 +33,7 @@
     </div>
     <div class="table-wrap">
       <table class="px-table">
-        <thead><tr><th class="col-check"><input type="checkbox" id="mb-check-all" onclick="toggleSelectAll(this.checked)"></th><th>邮箱</th><th>注册数量</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th class="col-check"><input type="checkbox" id="mb-check-all" onclick="toggleSelectAll(this.checked)"></th><th>邮箱</th><th>来源</th><th>注册数量</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="mb-rows"></tbody>
       </table>
       <div class="pager" id="mb-pager"></div>
@@ -100,6 +105,6 @@
 
 <div id="toast" class="toast" style="display:none"></div>
 <script src="/static/layout.js"></script>
-<script src="/static/mailboxes.js?v=7"></script>
+<script src="/static/mailboxes.js?v=8"></script>
 </body>
 </html>

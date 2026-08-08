@@ -19,7 +19,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"chatgpt-register/internal/models"
+	"grok-register/internal/models"
 )
 
 const (

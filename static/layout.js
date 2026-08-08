@@ -155,7 +155,7 @@ function renderPager(elId, page, maxPage, go) {
   aside.innerHTML = `
     <div class="logo">
       <div class="logo-icon">C</div>
-      <div class="logo-text">ChatGPT</div>
+      <div class="logo-text">Grok</div>
     </div>
     <div class="menu-group">导航</div>
     <nav id="menu">${nav}</nav>

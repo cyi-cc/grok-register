@@ -5,10 +5,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
-	"chatgpt-register/internal/emailalias"
-	"chatgpt-register/internal/mailfetch"
-	"chatgpt-register/internal/models"
+	"grok-register/internal/mailfetch"
+	"grok-register/internal/models"
+	"grok-register/internal/varymail"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +41,14 @@ func (h *Handler) MailboxList(c *gin.Context) {
 	if s := c.Query("status"); s != "" {
 		q = q.Where("status = ?", s)
 	}
+	if src := c.Query("source"); src != "" {
+		if src == models.MailboxSourceLocal {
+			// 加字段前的老数据没有来源，按本地邮箱算。
+			q = q.Where("source = ? OR source IS NULL OR source = ''", src)
+		} else {
+			q = q.Where("source = ?", src)
+		}
+	}
 	if kw := c.Query("q"); kw != "" {
 		like := "%" + kw + "%"
 		q = q.Where("email LIKE ? OR provider LIKE ? OR note LIKE ?", like, like, like)
@@ -58,7 +67,7 @@ func (h *Handler) MailboxList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	registerLimit := 1 + h.fissionCount()
+	registerLimit := 1
 	for i := range items {
 		items[i].RegisterCount = h.mailboxRegisterCount(items[i])
 		items[i].RegisterLimit = registerLimit
@@ -66,25 +75,10 @@ func (h *Handler) MailboxList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size})
 }
 
-func (h *Handler) fissionCount() int {
-	var s models.Setting
-	if err := h.DB.Where("key = ?", "fission_count").First(&s).Error; err != nil {
-		return 5
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(s.Value))
-	if err != nil || n < 0 {
-		return 5
-	}
-	return n
-}
-
 func (h *Handler) mailboxRegisterCount(m models.Mailbox) int {
 	var n int64
-	// 归属该邮箱的记录：本身地址、mailbox_id 或别名（母号 + 裂变子号）
+	// 归属该邮箱的记录：本身地址或 mailbox_id
 	match := h.DB.Where("mailbox_id = ? OR email = ?", m.ID, m.Email)
-	if pattern := emailalias.LikePattern(m.Email); pattern != "" {
-		match = match.Or("email LIKE ? ESCAPE '\\'", pattern)
-	}
 	// 只统计已占用名额的记录（成功注册 / 停用），pending / 失败可重试不计入
 	h.DB.Model(&models.Registration{}).
 		Where(match).
@@ -103,7 +97,7 @@ func (h *Handler) MailboxCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
 		return
 	}
-	m := models.Mailbox{Email: in.Email, Password: in.Password, Provider: in.Provider, ClientID: in.ClientID, RefreshToken: in.RefreshToken, Status: in.Status, Note: in.Note}
+	m := models.Mailbox{Email: in.Email, Password: in.Password, Provider: in.Provider, ClientID: in.ClientID, RefreshToken: in.RefreshToken, Status: in.Status, Note: in.Note, Source: models.MailboxSourceLocal}
 	if m.Status == "" {
 		m.Status = "unverified"
 	}
@@ -151,6 +145,7 @@ func (h *Handler) MailboxImport(c *gin.Context) {
 			ClientID:     strings.TrimSpace(it.ClientID),
 			RefreshToken: strings.TrimSpace(it.RefreshToken),
 			Status:       "verifying",
+			Source:       models.MailboxSourceLocal,
 		}
 		if err := h.DB.Create(&m).Error; err != nil {
 			skipped++
@@ -228,6 +223,19 @@ func (h *Handler) MailboxMessages(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "邮箱不存在"})
 		return
 	}
+	if m.Source == models.MailboxSourceVarymail {
+		msg, err := h.varymailCode(c, m)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "email": m.Email})
+			return
+		}
+		items := []mailfetch.Message{}
+		if msg.ID != "" {
+			items = append(items, msg)
+		}
+		c.JSON(http.StatusOK, gin.H{"email": m.Email, "items": items})
+		return
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	msgs, err := h.Mail.ListMessages(c.Request.Context(), mailfetch.Account{
 		Email:        m.Email,
@@ -252,6 +260,15 @@ func (h *Handler) MailboxMessage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "邮箱不存在"})
 		return
 	}
+	if m.Source == models.MailboxSourceVarymail {
+		msg, err := h.varymailCode(c, m)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "email": m.Email})
+			return
+		}
+		c.JSON(http.StatusOK, msg)
+		return
+	}
 	msg, err := h.Mail.GetMessage(c.Request.Context(), mailfetch.Account{
 		Email:        m.Email,
 		ClientID:     m.ClientID,
@@ -266,4 +283,46 @@ func (h *Handler) MailboxMessage(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, msg)
+}
+
+// varymailCode vary 邮箱没有 IMAP 凭据，取件走 vary.email 取件权接口，
+// 把最新一封来信（只含验证码）包装成与 Outlook 取件一致的消息结构。
+func (h *Handler) varymailCode(c *gin.Context, m models.Mailbox) (mailfetch.Message, error) {
+	key := h.setting("varymail_api_key")
+	if key == "" {
+		return mailfetch.Message{}, errors.New("请先在设置里填写 varymail API Key")
+	}
+	if m.VaryPurchaseID == 0 {
+		return mailfetch.Message{}, errors.New("该 vary 邮箱缺少取件权，无法取件")
+	}
+	msg, hasMail, err := varymail.New("", key).Code(c.Request.Context(), m.VaryPurchaseID)
+	if err != nil {
+		return mailfetch.Message{}, err
+	}
+	if !hasMail {
+		return mailfetch.Message{}, nil
+	}
+	id := msg.ID
+	if id == "" {
+		id = msg.Code
+	}
+	return mailfetch.Message{
+		ID:         id,
+		From:       msg.From,
+		FromName:   "vary.email",
+		Subject:    "验证码 " + msg.Code,
+		ReceivedAt: parseVarymailTime(msg.ReceivedAt),
+		Text:       msg.Code,
+	}, nil
+}
+
+// parseVarymailTime 兼容 vary.email 返回的几种时间格式，解析失败按当前时间。
+func parseVarymailTime(s string) time.Time {
+	s = strings.TrimSpace(s)
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Now()
 }

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"chatgpt-register/internal/auth"
-	"chatgpt-register/internal/browserboot"
-	"chatgpt-register/internal/db"
-	"chatgpt-register/internal/handlers"
-	"chatgpt-register/internal/replenish"
+	"grok-register/internal/auth"
+	"grok-register/internal/browserboot"
+	"grok-register/internal/db"
+	"grok-register/internal/handlers"
+	"grok-register/internal/replenish"
 
 	"github.com/gin-gonic/gin"
 )
@@ -115,7 +115,7 @@ func main() {
 	if !strings.Contains(addr, ":") {
 		addr = ":" + addr
 	}
-	log.Printf("chatgpt-register listening on http://localhost%s", addr)
+	log.Printf("grok-register listening on http://localhost%s", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatal(err)
 	}

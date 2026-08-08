@@ -1,6 +1,6 @@
 # chatgpt-register
 
-> **ChatGPT 账号全自动批量注册管理台** · 无头浏览器全自动 · 30 秒极速注册 · 百分百成功率 · 一键裂变子号
+> **Grok（x.ai）账号全自动批量注册管理台** · python + nodriver 无头注册 · 自动提取 sso cookie
 
 ---
 
@@ -14,9 +14,9 @@
 
 ## ✨ 核心优势
 
-| 🚀 30 秒极速注册 | ✅ 百分百成功率 | 🔁 母号裂变子号 |
+| 🚀 30 秒极速注册 | ✅ 百分百成功率 | 📬 邮箱自动收码 |
 |:---:|:---:|:---:|
-| Rod 浏览器自动化 + Stealth 反检测，全程无需人工干预 | 验证码自动从邮箱读取，全流程零手动操作 | 每个邮箱注册 1 个母号 + N 个别名子号，账号数量指数级增长 |
+| python + nodriver 无头自动化，全程无需人工干预 | 验证码自动从邮箱读取，全流程零手动操作 | 每个邮箱注册 1 个账号，用邮箱本身地址 |
 
 | 🌐 代理池轮转 | 📊 可视化管理台 | 📦 零依赖部署 |
 |:---:|:---:|:---:|
@@ -26,40 +26,52 @@
 
 ## 🤖 无头注册——技术亮点
 
-> 基于 **go-rod + rod/stealth** 驱动真实 Chromium 内核，模拟真人操作全程自动完成注册，OpenAI 无法识别为机器人。
+> 注册流程由 **python + nodriver** 驱动真实 Chromium/Edge 内核无头完成（Go 端 subprocess 调用 `pyreg/`），
+> 拿到 `sso` cookie 即完成，入库后可批量导出（一行一个）。
 
 ### 注册全流程（全自动，无需人工）
 
 ```
-启动浏览器（无头/有头可配）
+Go 调 pyreg/grok_register.py（无头启动浏览器）
     ↓
-打开 ChatGPT 注册页，注入 Stealth 脚本（绕过 bot 检测）
+打开 accounts.x.ai 注册页，用邮箱方式注册
     ↓
-自动填写邮箱 + 随机密码
+自动填写邮箱 + 随机密码 + 随机姓名
     ↓
-实时监听邮箱，自动读取 6 位验证码并填入（最长等待 3 分钟）
+python 打印 __NEED_CODE__ → Go 从 vary.email / 邮箱读取验证码（C1O-6KS 去连字符）写回其 stdin
     ↓
-完成注册 → 获取 accessToken
+等待 Cloudflare Turnstile token 就绪后提交注册
     ↓
-从 accessToken 解出账号信息（account_id / user_id / plan_type）
+轮询 grok.com 的 cookie 提取 sso（最多 120 秒）
     ↓
-导出完整 auth.json（含 access_token / account_id 等）
-    ↓
-写入数据库，账号状态更新为「已注册」
+Go 组装 auth 数据写入数据库，账号状态更新为「已注册」
 ```
 
 ### 关键技术点
 
 | 特性 | 说明 |
 |------|------|
-| **Stealth 反检测** | 注入 rod/stealth 脚本，抹除 `navigator.webdriver` 等浏览器自动化特征，绕过 OpenAI 的机器人识别 |
-| **验证码自动读取** | 直接对接邮箱 API（Outlook/Gmail），每 5 秒轮询一次，无需人工复制粘贴 |
-| **IP 与浏览器一致** | 浏览器注册和后续 API 请求走同一个代理出口，保证同 IP 签发 Token，避免风控拦截 |
-| **GeoIP 自动检测** | 注册前检测代理 IP 归属地，自动设置匹配的浏览器语言 / 时区，降低异常风控概率 |
-| **Chromium 自动下载** | 首次运行自动下载匹配版本的 Chromium，无需手动安装 Chrome |
-| **无头模式** | 生产环境开启无头模式，无需显示器，支持服务器 / VPS 部署 |
-| **截图存证** | 注册每个关键步骤自动截图，失败时可直接在管理台查看现场图，快速定位问题 |
-| **并发安全** | 多个注册任务并发执行，每个任务独立浏览器上下文，互不干扰 |
+| **python + nodriver** | 注册不在 Go 里复现，直接 subprocess 调 `pyreg/grok_register.py`，天然无头、无 webdriver 特征 |
+| **验证码自动读取** | 对接 vary.email 取件 / Outlook 邮箱 API，每 5 秒轮询一次，无需人工复制粘贴 |
+| **Turnstile 等待** | 只等页面自己拿到 `cf-turnstile-response`，拿不到就不提交，不做破解 |
+| **sso cookie 提取** | 注册提交后轮询 cookie，拿到 `sso` / `sso-rw` 即入库，不再换 token |
+| **IP 与浏览器一致** | 注册全程走同一个代理出口，避免风控拦截 |
+| **无头模式** | 默认无头，无需显示器，支持服务器 / VPS 部署 |
+| **并发安全** | 多个注册任务并发执行，每个任务一个独立 python 进程与浏览器实例，互不干扰 |
+
+### 运行前置
+
+Go 端只负责调度，注册脚本需要本机的 python 环境：
+
+```bash
+pip install nodriver curl_cffi
+```
+
+| 环境变量 | 说明 |
+|----------|------|
+| `GROK_PYTHON` | python 解释器，默认 Windows `python` / 其它 `python3` |
+| `GROK_PYREG_DIR` | 脚本目录，默认工作目录下的 `pyreg` |
+| `EDGE_PATH` | 浏览器可执行路径，默认本机 Edge |
 
 ---
 
@@ -86,14 +98,12 @@ chatgpt-register/
 ├── main.go                  # 入口：Gin 路由注册 + 静态文件嵌入
 ├── internal/
 │   ├── auth/                # JWT 鉴权服务（单 token、自动续期、落库）
-│   ├── browserboot/         # Rod 浏览器生命周期管理（启动时自动下载 Chromium）
-│   ├── codexreg/            # ChatGPT 注册核心逻辑（浏览器自动化 + Stealth）
-│   │   ├── browser.go       # 浏览器实例封装
-│   │   ├── codex.go         # 注册流程自动化
-│   │   ├── geoip.go         # IP 归属地检测（代理验证）
+│   ├── codexreg/            # Grok 注册入口（subprocess 调 python）
+│   │   ├── python.go        # 调 pyreg/grok_register.py + 验证码回填协议
+│   │   ├── codex.go         # 用拿到的 sso 组装 auth 数据
 │   │   └── codexreg.go      # 注册任务入口
 │   ├── db/                  # SQLite 数据库初始化（纯 Go 驱动，无需 CGO）
-│   ├── emailalias/          # 邮箱别名生成（裂变子号）
+│   ├── emailalias/          # 邮箱地址规整
 │   ├── handlers/            # HTTP 接口层（Gin Handler）
 │   │   ├── auth.go          # 登录 / 改密接口
 │   │   ├── registration.go  # 账户 CRUD + 日志 + 截图接口
@@ -103,7 +113,10 @@ chatgpt-register/
 │   │   └── settings.go      # 系统设置接口
 │   ├── mailfetch/           # 邮件取件（自动读取验证码）
 │   ├── models/              # GORM 数据模型（Admin / Registration / Mailbox / Setting）
-│   └── producer/            # 批量注册调度器（并发控制 + 裂变策略）
+│   └── producer/            # 批量注册调度器（并发控制）
+├── pyreg/                   # python 注册脚本（nodriver）
+│   ├── grok_register.py     # 无头跑完 accounts.x.ai 注册，提取 sso
+│   └── export_sub2api.py    # 导出 sub2api-data JSON
 └── static/                  # 前端静态页面（嵌入二进制，无需 Web 服务器）
     ├── dashboard.html        # 仪表盘
     ├── accounts.html/js      # 账户管理
@@ -114,7 +127,7 @@ chatgpt-register/
     └── style.css             # 毛玻璃主题 CSS（35KB 精心打磨）
 ```
 
-**技术栈：** Go · Gin · GORM · SQLite（纯 Go 驱动）· go-rod · rod/stealth · JWT · 原生 H5
+**技术栈：** Go · Gin · GORM · SQLite（纯 Go 驱动）· python + nodriver · curl_cffi · JWT · 原生 H5
 
 ---
 
@@ -179,11 +192,11 @@ ADDR=8080 ./chatgpt-register.exe
 ### 批量生产（核心功能）
 
 1. 在「邮箱管理」导入邮箱（支持批量 CSV 导入）
-2. 在「系统设置」配置并发数、裂变数量、代理池
+2. 在「系统设置」配置并发数、代理池
 3. 在「仪表盘」点击「生产」，设置目标数量，一键启动
 4. 实时查看进度、成功率、执行日志和注册截图
 
-**裂变策略：** 每个邮箱先注册母号（用邮箱本身地址），母号成功后用别名（`email-001@…`）注册裂变子号，每个邮箱最多 `1 + 裂变数量` 个账号。注册失败自动补单直到达标。
+**注册策略：** 每个已验证邮箱注册一个账号（用邮箱本身地址）。注册失败自动补单直到达标。
 
 ### 邮箱管理
 
@@ -217,7 +230,6 @@ ADDR=8080 ./chatgpt-register.exe
 | 参数 | 说明 | 建议值 |
 |------|------|--------|
 | 并发数 | 同时注册的账号数量 | 3 ~ 5 |
-| 裂变数量 | 每个邮箱注册的子号数 | 5（即 1母 + 5子 = 6个账号） |
 | 无头模式 | 是否隐藏浏览器窗口 | 生产环境建议开启 |
 | 代理池 | 每行一个代理，格式见下方 | 按需配置 |
 
@@ -234,7 +246,7 @@ http://ip:port
 
 1. 进入「仪表盘」，点击右上角「**空跑**」按钮先测试环境
 2. 点击「**生产**」，输入目标账号数量
-3. 系统自动调度：优先注册母号 → 母号成功后裂变子号 → 失败自动补单直到达标
+3. 系统自动调度：给每个已验证邮箱注册一个账号 → 失败自动补单直到达标
 4. 实时查看成功数 / 失败数 / 进度条
 
 ---

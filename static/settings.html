@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>系统设置 · ChatGPT 注册管理</title>
+<title>系统设置 · Grok 注册管理</title>
 <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body data-page="settings">
@@ -31,14 +31,6 @@
             <span class="suffix">个</span>
           </div>
         </div>
-        <div class="field">
-          <label>裂变数量</label>
-          <span class="field-hint">每个账号最多可继续裂变的次数</span>
-          <div class="input-suffix">
-            <input id="set-fission-count" class="px-input" type="number" min="1" max="100" placeholder="默认 5">
-            <span class="suffix">次</span>
-          </div>
-        </div>
         <div class="settings-foot">
           <button class="px-btn primary" onclick="saveSettings()">保存设置</button>
         </div>
@@ -56,7 +48,7 @@
         </div>
         <div class="field">
           <label>来源</label>
-          <span class="field-hint">Outlook = 本地已验证邮箱 + 别名裂变；varymail = 按次购买取件（无裂变）</span>
+          <span class="field-hint">Outlook = 本地已验证邮箱；varymail = 按次购买取件</span>
           <select id="set-email-source" class="px-input" onchange="onSourceChange()">
             <option value="outlook">本地 Outlook 邮箱</option>
             <option value="varymail">varymail 取件</option>
@@ -65,19 +57,19 @@
         <div id="varymail-fields">
           <div class="field">
             <label>varymail API Key</label>
-            <span class="field-hint">在 vary.email 后台获取，仅保存在本系统。服务固定用 chatgpt，API 地址固定 https://vary.email</span>
+            <span class="field-hint">在 vary.email 后台获取，仅保存在本系统。服务固定用 xAI，API 地址固定 https://vary.email</span>
             <input id="set-varymail-key" class="px-input" type="text" autocomplete="off" spellcheck="false" placeholder="API Key">
           </div>
           <div class="field">
             <div class="field-label-row">
-              <label>chatgpt 服务库存</label>
+              <label>xAI 服务库存</label>
               <span id="varymail-price" class="count-badge"></span>
             </div>
             <span class="field-hint">生产前会自动判断库存；点下面按钮验证 Key 并查看当前可用数</span>
           </div>
           <div id="varymail-result" class="proxy-result" style="display:none"></div>
           <div class="settings-foot">
-            <button id="varymail-check-btn" class="px-btn ghost" onclick="checkVarymail()">查询 chatgpt 库存</button>
+            <button id="varymail-check-btn" class="px-btn ghost" onclick="checkVarymail()">查询 xAI 库存</button>
           </div>
         </div>
         <div class="settings-foot">
@@ -102,7 +94,7 @@
         </label>
         <div class="field">
           <label>存活少于多少补</label>
-          <span class="field-hint">每 30 秒检查一次目标站 openai 存活号数，低于该值就用未出库的已注册账号补足</span>
+          <span class="field-hint">每 30 秒检查一次目标站 grok 存活号数，低于该值就用未出库的已注册账号补足</span>
           <div class="input-suffix">
             <input id="set-replenish-threshold" class="px-input" type="number" min="1" max="10000" placeholder="如 20">
             <span class="suffix">个</span>
@@ -200,7 +192,6 @@ async function loadSettings() {
   const r = await api('/api/settings');
   const d = await r.json();
   document.getElementById('set-max-concurrency').value = d.max_concurrency || '10';
-  document.getElementById('set-fission-count').value = d.fission_count || '5';
   document.getElementById('set-proxy-enabled').checked = d.proxy_enabled === '1';
   document.getElementById('set-proxy-list').value = d.proxy_list || '';
   updateProxyCount();
@@ -208,7 +199,7 @@ async function loadSettings() {
   document.getElementById('set-email-source').value = d.email_source === 'varymail' ? 'varymail' : 'outlook';
   document.getElementById('set-varymail-key').value = d.varymail_api_key || '';
   onSourceChange();
-  // 已配置 Key 则自动查一次 chatgpt 库存
+  // 已配置 Key 则自动查一次 xAI 库存
   if (d.varymail_api_key) checkVarymail(true);
 
   document.getElementById('set-replenish-enabled').checked = d.replenish_enabled === '1';
@@ -274,7 +265,7 @@ async function checkVarymail(silent) {
     document.getElementById('varymail-price').textContent = '单价 ' + (d.price != null ? d.price : '?');
     box.style.display = 'flex';
     box.className = 'proxy-result ' + (usable ? 'ok' : 'fail');
-    box.textContent = (usable ? '✓ ' : '✗ ') + `${svc.name || 'chatgpt'} · 可用 ${svc.available || 0} · ${stockTxt}` + (usable ? '' : '（暂不可用）');
+    box.textContent = (usable ? '✓ ' : '✗ ') + `${svc.name || 'xAI'} · 可用 ${svc.available || 0} · ${stockTxt}` + (usable ? '' : '（暂不可用）');
   } catch (e) {
     box.style.display = 'flex';
     box.className = 'proxy-result fail';
@@ -367,7 +358,6 @@ async function saveProxy() {
 async function saveSettings() {
   const body = {
     max_concurrency: document.getElementById('set-max-concurrency').value.trim(),
-    fission_count: document.getElementById('set-fission-count').value.trim(),
   };
   const r = await api('/api/settings', {
     method: 'PUT',

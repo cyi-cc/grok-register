@@ -29,7 +29,7 @@ type Manager struct {
 }
 
 func New() *Manager {
-	return &Manager{st: Status{Phase: "checking", Message: "正在检查浏览器..."}}
+	return &Manager{st: Status{Phase: "checking", Message: "正在四处找浏览器…🔍"}}
 }
 
 // Snapshot 返回状态副本。
@@ -71,9 +71,9 @@ func (m *Manager) Println(vs ...interface{}) {
 					}
 					s.Percent = n
 					if s.Phase == "unzip" {
-						s.Message = fmt.Sprintf("正在解压浏览器 %d%%", n)
+						s.Message = fmt.Sprintf("拆包裹中…浏览器解压 %d%% 📦", n)
 					} else {
-						s.Message = fmt.Sprintf("正在下载浏览器 %d%%", n)
+						s.Message = fmt.Sprintf("浏览器空投中 %d%% 🚀", n)
 					}
 				})
 			}
@@ -83,19 +83,19 @@ func (m *Manager) Println(vs ...interface{}) {
 			s.Downloading = true
 			s.Phase = "downloading"
 			s.Percent = 0
-			s.Message = "开始下载浏览器..."
+			s.Message = "本地没有浏览器，呼叫空投…🛫"
 		})
 	case strings.HasPrefix(tag, "Unzip:"):
 		m.set(func(s *Status) {
 			s.Downloading = true
 			s.Phase = "unzip"
 			s.Percent = 0
-			s.Message = "正在解压浏览器..."
+			s.Message = "包裹到啦，拆箱解压中…📦"
 		})
 	case strings.HasPrefix(tag, "Downloaded:"):
 		m.set(func(s *Status) {
 			s.Percent = 100
-			s.Message = "下载完成，正在校验..."
+			s.Message = "下载完毕，验货中…🔎"
 		})
 	}
 }
@@ -112,7 +112,7 @@ func (m *Manager) ensure() {
 	// 已存在且可用 → 直接就绪，不下载。
 	if err := b.Validate(); err == nil {
 		m.set(func(s *Status) {
-			*s = Status{Ready: true, Percent: 100, Phase: "ready", Message: "浏览器已就绪"}
+			*s = Status{Ready: true, Percent: 100, Phase: "ready", Message: "浏览器已就位，随时开工 🎉"}
 		})
 		return
 	}
@@ -121,7 +121,7 @@ func (m *Manager) ensure() {
 		s.Ready = false
 		s.Downloading = true
 		s.Phase = "downloading"
-		s.Message = "缺少浏览器，正在下载..."
+		s.Message = "没找到浏览器，先薅一个回来…⬇️"
 	})
 
 	if _, err := b.Get(); err != nil {
@@ -130,12 +130,12 @@ func (m *Manager) ensure() {
 			s.Downloading = false
 			s.Phase = "error"
 			s.Error = err.Error()
-			s.Message = "浏览器下载失败，请检查网络后重启程序"
+			s.Message = "哎呀，浏览器下载翻车了 🙈 检查下网络再重启试试"
 		})
 		return
 	}
 
 	m.set(func(s *Status) {
-		*s = Status{Ready: true, Percent: 100, Phase: "ready", Message: "浏览器已就绪"}
+		*s = Status{Ready: true, Percent: 100, Phase: "ready", Message: "浏览器已就位，随时开工 🎉"}
 	})
 }

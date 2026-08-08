@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>仪表盘 · ChatGPT 注册管理</title>
+<title>仪表盘 · Grok 注册管理</title>
 <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body data-page="dashboard">
@@ -74,8 +74,6 @@
       <div class="px-panel">
         <h2>账号结构</h2>
         <div class="mini-rows">
-          <div class="mini-row"><span>母号</span><b id="mi-mother">0</b></div>
-          <div class="mini-row"><span>裂变子号</span><b id="mi-fission">0</b></div>
           <div class="mini-row"><span>已出库</span><b id="mi-shipped">0</b></div>
           <div class="mini-row"><span>可用邮箱 / 邮箱总数</span><b><span id="mi-mbv">0</span> / <span id="mi-mb">0</span></b></div>
         </div>
@@ -88,7 +86,7 @@
     <div class="px-panel dash-recent">
       <h2>最近账户</h2>
       <table class="px-table">
-        <thead><tr><th>ID</th><th>Email</th><th>母号</th><th>状态</th><th>出库</th><th>创建时间</th></tr></thead>
+        <thead><tr><th>ID</th><th>Email</th><th>状态</th><th>出库</th><th>创建时间</th></tr></thead>
         <tbody id="dash-rows"></tbody>
       </table>
     </div>
@@ -166,8 +164,6 @@ async function loadDashboard() {
   const r = await api('/api/stats');
   const d = await r.json();
   for (const k of ['total', 'registered', 'registering', 'register_failed', 'unshipped', 'mailbox_verified']) set('st-' + k, d[k] || 0);
-  set('mi-mother', d.mother || 0);
-  set('mi-fission', d.fission || 0);
   set('mi-shipped', d.shipped || 0);
   set('mi-mbv', d.mailbox_verified || 0);
   set('mi-mb', d.mailboxes || 0);
@@ -182,11 +178,10 @@ async function loadDashboard() {
     <tr>
       <td>${x.id}</td>
       <td>${esc(x.email)}</td>
-      <td>${x.is_mother ? '母号' : '裂变'}</td>
       <td><span class="badge ${esc(x.status)}">${DASH_STATUS[x.status] || esc(x.status)}</span></td>
       <td>${x.shipped ? '已出库' : '未出库'}</td>
       <td>${fmtTime(x.created_at)}</td>
-    </tr>`).join('') || '<tr><td colspan="6">暂无数据</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>';
 }
 async function loadBrowser() {
   let s;

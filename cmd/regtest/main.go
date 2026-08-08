@@ -1,4 +1,4 @@
-// Command regtest 用单个指定邮箱跑一遍完整生产流程（代理→GeoIP→ChatGPT注册→读码→Codex身份），
+// Command regtest 用单个指定邮箱跑一遍完整生产流程（python 注册 Grok→读码→PKCE 换 token），
 // 便于端到端验证，不走 producer 的邮箱选择逻辑。凭据从 JSON 文件读取，避免写死。
 //
 //	用法: regtest <config.json>
@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"chatgpt-register/internal/codexreg"
-	"chatgpt-register/internal/mailfetch"
+	"grok-register/internal/codexreg"
+	"grok-register/internal/mailfetch"
 )
 
 type cfg struct {
@@ -26,7 +26,9 @@ type cfg struct {
 	Headless     bool   `json:"headless"`
 }
 
-var codeRe = regexp.MustCompile(`\b(\d{6})\b`)
+// x.ai 验证码：形如 C1O-6KS。
+var codeRe = regexp.MustCompile(`\b([A-Z0-9]{3}-[A-Z0-9]{3}|[A-Z0-9]{6})\b`)
+var nonAlnumRe = regexp.MustCompile(`[^A-Za-z0-9]`)
 
 func main() {
 	path := "regtest.json"
@@ -69,18 +71,15 @@ func main() {
 							continue
 						}
 						s := strings.ToLower(m.From + " " + m.FromName + " " + m.Subject)
-						if !strings.Contains(s, "openai") && !strings.Contains(s, "chatgpt") && !strings.Contains(s, "code") {
+						if !strings.Contains(s, "x.ai") && !strings.Contains(s, "spacexai") && !strings.Contains(s, "grok") {
 							continue
-						}
-						if code := codeRe.FindStringSubmatch(m.Subject); code != nil {
-							return code[1], nil
 						}
 						full, gerr := mail.GetMessage(ctx, acc, m.ID)
 						if gerr != nil {
 							continue
 						}
-						if code := codeRe.FindStringSubmatch(full.Subject + " " + full.Text); code != nil {
-							return code[1], nil
+						if code := codeRe.FindStringSubmatch(full.Text + " " + full.Subject); code != nil {
+							return nonAlnumRe.ReplaceAllString(strings.ToUpper(code[1]), ""), nil
 						}
 					}
 				}

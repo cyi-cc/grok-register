@@ -1,4 +1,4 @@
-module chatgpt-register
+module grok-register
 
 go 1.25.0
 

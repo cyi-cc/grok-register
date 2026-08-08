@@ -1,11 +1,9 @@
-// Package producer 编排 ChatGPT + Codex 账号的批量"生产"。
+// Package producer 编排 Grok（x.ai）账号的批量"生产"。
 //
-// 规则：维持"母号 + 指定数量的裂变"——每个邮箱先注册主号(母号，用邮箱本身地址)，
-// 母号成功后才用别名(email-001@…)注册裂变子号，每个邮箱最多 1 + FissionCount 个账号。
+// 规则：每个已验证邮箱注册一个账号（用邮箱本身地址）。
 //
 // 目标数量 target 表示本次要成功产出的账号数。注册失败不计入成功，会自动补一个新任务
 // 继续注册（"注册失败→注册数量-1→待生产+1"），直到达标或邮箱容量耗尽。
-// 母号注册失败时该邮箱不会往下开裂变，下次仍优先重试母号。
 //
 // 验证码由 mailfetch 从邮箱自动读取，无需人工输入。
 package producer
@@ -21,35 +19,39 @@ import (
 	"sync"
 	"time"
 
-	"chatgpt-register/internal/codexreg"
-	"chatgpt-register/internal/emailalias"
-	"chatgpt-register/internal/mailfetch"
-	"chatgpt-register/internal/models"
+	"grok-register/internal/codexreg"
+	"grok-register/internal/mailfetch"
+	"grok-register/internal/models"
 
 	"gorm.io/gorm"
 )
 
 const (
 	defaultMaxConcurrency = 10
-	defaultFissionCount   = 5
-	codePollTimeout       = 3 * time.Minute
-	codePollInterval      = 5 * time.Second
+	codePollTimeout       = 120 * time.Second
+	codePollInterval      = 3 * time.Second
 	maxLogLines           = 300
 )
 
-// openAI 验证码：6 位数字。
-var codeRe = regexp.MustCompile(`\b(\d{6})\b`)
+// x.ai 验证码：形如 C1O-6KS 的 3-3 位字母数字（也兼容不带连字符的 6 位）。
+var codeRe = regexp.MustCompile(`\b([A-Z0-9]{3}-[A-Z0-9]{3}|[A-Z0-9]{6})\b`)
+
+// normalizeCode 去掉连字符等分隔符，页面 OTP 框只接受 6 位字母数字。
+var nonAlnumRe = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+func normalizeCode(s string) string {
+	return nonAlnumRe.ReplaceAllString(strings.ToUpper(strings.TrimSpace(s)), "")
+}
 
 // 邮箱来源。
 const (
-	SourceOutlook  = "outlook"  // 本地已验证 Outlook 邮箱 + 别名裂变（默认）
-	SourceVarymail = "varymail" // vary.email 取件：按次购买邮箱，无裂变
+	SourceOutlook  = "outlook"  // 本地已验证 Outlook 邮箱（默认）
+	SourceVarymail = "varymail" // vary.email 取件：按次购买邮箱
 )
 
 // Config 从系统设置装载的运行参数。
 type Config struct {
 	MaxConcurrency int
-	FissionCount   int
 	Headless       bool
 	Proxies        []string // 代理池，按账户轮转；空=直连
 
@@ -144,7 +146,7 @@ func (p *Producer) run(ctx context.Context, target int) {
 		p.runVarymail(ctx, target, cfg)
 		return
 	}
-	p.logf("开始生产，目标 %d 个账号（每邮箱母号+%d 裂变，并发 %d）", target, cfg.FissionCount, cfg.MaxConcurrency)
+	p.logf("开始生产，目标 %d 个账号（每邮箱注册 1 个，并发 %d）", target, cfg.MaxConcurrency)
 
 	sem := make(chan struct{}, cfg.MaxConcurrency)
 	var wg sync.WaitGroup
@@ -186,8 +188,7 @@ func (p *Producer) run(ctx context.Context, target int) {
 				p.releaseInflight(email)
 				p.updateProgress()
 			}()
-			// 兜底：rod 的 MustXxx 会 panic，若不 recover 会连累整个进程崩溃（宕机）。
-			// 把 panic 归一成一次注册失败，服务继续存活。
+			// 兜底：把 panic 归一成一次注册失败，服务继续存活，不连累整个进程。
 			defer func() {
 				if r := recover(); r != nil {
 					p.markFailed(email)
@@ -227,8 +228,8 @@ func (p *Producer) run(ctx context.Context, target int) {
 	}
 }
 
-// nextJob 领取下一个要注册的账号：先在所有邮箱补齐母号，再开裂变子号。
-// 每个邮箱同一时刻只允许一个在跑任务（避免验证码串号，也保证母号先行）。
+// nextJob 领取下一个要注册的账号：给未注册成功且空闲的邮箱注册其本身地址。
+// 每个邮箱同一时刻只允许一个在跑任务（避免验证码串号）。
 func (p *Producer) nextJob(cfg Config) (models.Mailbox, string, bool, bool) {
 	p.claimMu.Lock()
 	defer p.claimMu.Unlock()
@@ -238,7 +239,6 @@ func (p *Producer) nextJob(cfg Config) (models.Mailbox, string, bool, bool) {
 		return models.Mailbox{}, "", false, false
 	}
 
-	// Pass 1：母号（邮箱本身地址）未注册成功且该邮箱空闲 → 注册母号
 	for _, mb := range mailboxes {
 		if p.mailboxBusy(mb.ID) {
 			continue
@@ -248,35 +248,13 @@ func (p *Producer) nextJob(cfg Config) (models.Mailbox, string, bool, bool) {
 			return mb, mb.Email, true, true
 		}
 	}
-
-	// Pass 2：母号已成功、该邮箱空闲、裂变未满 → 注册一个新的别名子号
-	for _, mb := range mailboxes {
-		if p.mailboxBusy(mb.ID) {
-			continue
-		}
-		if !p.isRegistered(mb.Email) {
-			continue
-		}
-		if p.fissionCount(mb) >= cfg.FissionCount {
-			continue
-		}
-		alias := p.nextFissionEmail(mb.Email)
-		if alias == "" {
-			continue
-		}
-		p.markInflight(alias, mb.ID)
-		return mb, alias, false, true
-	}
 	return models.Mailbox{}, "", false, false
 }
 
-// produceOne 完整生产一个账号：注册 ChatGPT → 生成 Codex agent identity → 入库。
+// produceOne 完整生产一个账号：python 注册 Grok → PKCE 换 token → 入库。
 func (p *Producer) produceOne(ctx context.Context, cfg Config, mb models.Mailbox, email string, isMother bool) error {
 	password := codexreg.GenPassword(16)
 	note := ""
-	if !isMother {
-		note = "裂变(" + mb.Email + ")"
-	}
 	p.upsert(models.Registration{
 		Email: email, MailboxID: mb.ID, Password: password,
 		Status: "registering", IsMother: isMother, Note: note,
@@ -302,6 +280,8 @@ func (p *Producer) produceOne(ctx context.Context, cfg Config, mb models.Mailbox
 	}
 
 	since := time.Now().Add(-30 * time.Second)
+	// 提交邮箱前先记下当前最后一个验证码，之后只接受与它不同的新码。
+	baseline := p.scanCode(ctx, mb, since)
 	in := codexreg.Input{
 		Email:    email,
 		Password: password,
@@ -313,7 +293,7 @@ func (p *Producer) produceOne(ctx context.Context, cfg Config, mb models.Mailbox
 			p.logf("%s", "  "+mask(email)+" "+msg)
 		},
 		FetchCode: func(ctx context.Context) (string, error) {
-			return p.fetchCode(ctx, mb, since)
+			return p.fetchCode(ctx, mb, since, baseline)
 		},
 		SaveShot: func(png []byte) {
 			p.db.Model(&models.Registration{}).Where("email = ?", email).Update("shot", png)
@@ -342,31 +322,15 @@ func (p *Producer) produceOne(ctx context.Context, cfg Config, mb models.Mailbox
 	return nil
 }
 
-// fetchCode 轮询邮箱，从 OpenAI/ChatGPT 验证邮件里提取 6 位验证码。
-func (p *Producer) fetchCode(ctx context.Context, mb models.Mailbox, since time.Time) (string, error) {
-	acc := mailfetch.Account{Email: mb.Email, ClientID: mb.ClientID, RefreshToken: mb.RefreshToken}
+// fetchCode 每 codePollInterval 轮询一次邮箱，直到拿到与 baseline 不同的新验证码或超时。
+func (p *Producer) fetchCode(ctx context.Context, mb models.Mailbox, since time.Time, baseline string) (string, error) {
 	deadline := time.Now().Add(codePollTimeout)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		msgs, err := p.mail.ListMessages(ctx, acc, 15)
-		if err == nil {
-			for _, m := range msgs {
-				if m.ReceivedAt.Before(since) || !looksLikeOpenAI(m) {
-					continue
-				}
-				if code := codeRe.FindStringSubmatch(m.Subject); code != nil {
-					return code[1], nil
-				}
-				full, gerr := p.mail.GetMessage(ctx, acc, m.ID)
-				if gerr != nil {
-					continue
-				}
-				if code := codeRe.FindStringSubmatch(full.Subject + " " + full.Text); code != nil {
-					return code[1], nil
-				}
-			}
+		if code := p.scanCode(ctx, mb, since); code != "" && code != baseline {
+			return code, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -377,9 +341,39 @@ func (p *Producer) fetchCode(ctx context.Context, mb models.Mailbox, since time.
 	return "", fmt.Errorf("超时未收到验证码邮件")
 }
 
-func looksLikeOpenAI(m mailfetch.Message) bool {
+// scanCode 扫一遍邮箱，返回最新一封 x.ai 验证邮件里的验证码；没有则返回空串。
+func (p *Producer) scanCode(ctx context.Context, mb models.Mailbox, since time.Time) string {
+	acc := mailfetch.Account{Email: mb.Email, ClientID: mb.ClientID, RefreshToken: mb.RefreshToken}
+	msgs, err := p.mail.ListMessages(ctx, acc, 15)
+	if err != nil {
+		return ""
+	}
+	for _, m := range msgs {
+		if m.ReceivedAt.Before(since) || !looksLikeXAI(m) {
+			continue
+		}
+		full, gerr := p.mail.GetMessage(ctx, acc, m.ID)
+		if gerr != nil {
+			continue
+		}
+		// 验证码在正文（Body code: C1O-6KS），主题只有 Validate your email。
+		if code := codeRe.FindStringSubmatch(full.Text + " " + full.Subject); code != nil {
+			return normalizeCode(code[1])
+		}
+	}
+	return ""
+}
+
+// looksLikeXAI 判断是否 x.ai / Grok 的验证邮件（发件人 noreply@x.ai / SpaceXAI，
+// 主题 Validate your email）。
+func looksLikeXAI(m mailfetch.Message) bool {
 	s := strings.ToLower(m.From + " " + m.FromName + " " + m.Subject)
-	return strings.Contains(s, "openai") || strings.Contains(s, "chatgpt") || strings.Contains(s, "code")
+	for _, kw := range []string{"x.ai", "spacexai", "grok", "validate your email"} {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- inflight / 计数 ----
@@ -440,62 +434,15 @@ func (p *Producer) isRegistered(email string) bool {
 	return n > 0
 }
 
-// fissionCount 该邮箱已注册成功或在跑的裂变子号数量（不含母号）。
-func (p *Producer) fissionCount(mb models.Mailbox) int {
-	var n int64
-	q := p.db.Model(&models.Registration{}).
-		Where("mailbox_id = ? AND status IN ? AND email <> ?", mb.ID, []string{"registered", "already_registered"}, mb.Email)
-	q.Count(&n)
-	count := int(n)
-	// 加上该邮箱在跑的裂变
-	p.mu.Lock()
-	for email, id := range p.inflight {
-		if id == mb.ID && email != mb.Email {
-			count++
-		}
-	}
-	p.mu.Unlock()
-	return count
-}
-
-func (p *Producer) nextFissionEmail(base string) string {
-	for i := 1; i <= 999; i++ {
-		email := emailalias.Address(base, fmt.Sprintf("%03d", i))
-		if email == base {
-			return ""
-		}
-		p.mu.Lock()
-		_, busy := p.inflight[email]
-		p.mu.Unlock()
-		if busy {
-			continue
-		}
-		if !p.registrationExists(email) {
-			return email
-		}
-	}
-	return ""
-}
-
-func (p *Producer) registrationExists(email string) bool {
-	var n int64
-	p.db.Model(&models.Registration{}).Where("email = ?", email).Count(&n)
-	return n > 0
-}
-
 // ---- DB / 设置 ----
 
 func (p *Producer) loadConfig() Config {
 	cfg := Config{
 		MaxConcurrency: atoiDefault(p.getSetting("max_concurrency"), defaultMaxConcurrency),
-		FissionCount:   atoiDefault(p.getSetting("fission_count"), defaultFissionCount),
 		Headless:       p.getSetting("headless") != "0", // 默认无头，仅当设置为 "0" 时才有头
 	}
 	if cfg.MaxConcurrency < 1 {
 		cfg.MaxConcurrency = 1
-	}
-	if cfg.FissionCount < 0 {
-		cfg.FissionCount = defaultFissionCount
 	}
 	if p.getSetting("proxy_enabled") == "1" {
 		cfg.Proxies = proxyList(p.getSetting("proxy_list"))

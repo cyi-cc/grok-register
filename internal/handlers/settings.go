@@ -3,7 +3,7 @@ package handlers
 import (
 	"net/http"
 
-	"chatgpt-register/internal/models"
+	"grok-register/internal/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm/clause"

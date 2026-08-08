@@ -1,8 +1,8 @@
 package db
 
 import (
-	"chatgpt-register/internal/emailalias"
-	"chatgpt-register/internal/models"
+	"grok-register/internal/emailalias"
+	"grok-register/internal/models"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -19,6 +19,7 @@ func Init(path string) (*gorm.DB, error) {
 	normalizeLegacyStatuses(db)
 	reclaimOrphanRegistering(db)
 	backfillRegistrationMailboxIDs(db)
+	backfillMailboxSource(db)
 	return db, nil
 }
 
@@ -42,6 +43,12 @@ func normalizeLegacyStatuses(db *gorm.DB) {
 	for oldStatus, newStatus := range regStatusMap {
 		db.Model(&models.Registration{}).Where("status = ?", oldStatus).Update("status", newStatus)
 	}
+}
+
+// backfillMailboxSource 给加字段之前的老邮箱补来源：历史数据都是手工导入的本地邮箱。
+func backfillMailboxSource(db *gorm.DB) {
+	db.Model(&models.Mailbox{}).Where("source IS NULL OR source = ''").
+		Update("source", models.MailboxSourceLocal)
 }
 
 func backfillRegistrationMailboxIDs(db *gorm.DB) {

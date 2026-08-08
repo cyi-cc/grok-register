@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"chatgpt-register/internal/models"
-	"chatgpt-register/internal/varymail"
+	"grok-register/internal/models"
+	"grok-register/internal/varymail"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,7 +19,7 @@ func (h *Handler) setting(key string) string {
 	return strings.TrimSpace(s.Value)
 }
 
-// VarymailServices 查询固定的 chatgpt 服务库存，供设置页验证 Key/看库存。
+// VarymailServices 查询固定的 grok 服务库存，供设置页验证 Key/看库存。
 // 支持用 query 里的 key 临时覆盖（保存前先测试）。
 func (h *Handler) VarymailServices(c *gin.Context) {
 	key := strings.TrimSpace(c.Query("key"))

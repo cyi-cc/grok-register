@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"chatgpt-register/internal/auth"
+	"grok-register/internal/auth"
 
 	"github.com/gin-gonic/gin"
 )

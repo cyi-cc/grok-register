@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"chatgpt-register/internal/auth"
-	"chatgpt-register/internal/browserboot"
-	"chatgpt-register/internal/mailfetch"
-	"chatgpt-register/internal/models"
-	"chatgpt-register/internal/producer"
+	"grok-register/internal/auth"
+	"grok-register/internal/browserboot"
+	"grok-register/internal/mailfetch"
+	"grok-register/internal/models"
+	"grok-register/internal/producer"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -167,8 +167,6 @@ func (h *Handler) Stats(c *gin.Context) {
 	registered := reg("status = ?", "registered")
 	registerFailed := reg("status = ?", "register_failed")
 	shipped := reg("shipped = ?", true)
-	mother := reg("is_mother = ?", true)
-	fission := reg("is_mother = ?", false)
 
 	var mailboxes, mailboxVerified int64
 	h.DB.Model(&models.Mailbox{}).Count(&mailboxes)
@@ -215,7 +213,6 @@ func (h *Handler) Stats(c *gin.Context) {
 		"total": total, "pending": pending, "registering": registering,
 		"registered": registered, "register_failed": registerFailed,
 		"shipped": shipped, "unshipped": unshipped,
-		"mother": mother, "fission": fission,
 		"mailboxes": mailboxes, "mailbox_verified": mailboxVerified,
 		"plans": planBreak, "trend": trend,
 		"running": prog.Running, "produce_target": prog.Target,

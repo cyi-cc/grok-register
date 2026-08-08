@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"chatgpt-register/internal/db"
-	"chatgpt-register/internal/mailfetch"
-	"chatgpt-register/internal/producer"
+	"grok-register/internal/db"
+	"grok-register/internal/mailfetch"
+	"grok-register/internal/producer"
 )
 
 func main() {

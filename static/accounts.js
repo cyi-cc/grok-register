@@ -1,4 +1,4 @@
-/* ===== 账户管理（ChatGPT + Codex 生产） ===== */
+/* ===== 账户管理（Grok 账号生产） ===== */
 const ACC_STATUS = {
   pending: '待生产',
   registering: '注册中',
@@ -194,14 +194,14 @@ function syncBatchBar() {
   all.checked = ids.length > 0 && ids.every(id => accSelected.has(id));
 }
 
-/* ===== 下载（access_token 纯文本，一行一个；下载即出库） ===== */
+/* ===== 下载（sso 纯文本，一行一个；下载即出库） ===== */
 async function downloadAcc(id) {
-  await downloadByIds([id], 'access_token_' + id + '.txt');
+  await downloadByIds([id], 'sso_' + id + '.txt');
 }
 async function downloadSelected() {
   const ids = [...accSelected];
   if (!ids.length) return;
-  await downloadByIds(ids, 'access_tokens_' + ids.length + '.txt');
+  await downloadByIds(ids, 'sso_' + ids.length + '.txt');
 }
 async function downloadByIds(ids, filename) {
   const r = await api('/api/download', {

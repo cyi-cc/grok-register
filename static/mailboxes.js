@@ -10,6 +10,11 @@ const MB_STATUS = {
   verified: '已验证',
 };
 
+const MB_SOURCE = {
+  local: '本地邮箱',
+  varymail: 'vary 邮箱',
+};
+
 let mbLoading = false;
 const mbSelected = new Set();
 
@@ -19,9 +24,11 @@ async function loadMailboxes() {
   try {
     const q = document.getElementById('mb-search').value.trim();
     const status = document.getElementById('mb-filter').value;
+    const source = document.getElementById('mb-source-filter').value;
     const params = new URLSearchParams({ page: mbPage, size });
     if (q) params.set('q', q);
     if (status) params.set('status', status);
+    if (source) params.set('source', source);
     const r = await api('/api/mailboxes?' + params);
     const d = await r.json();
     mbCache = {};
@@ -30,6 +37,7 @@ async function loadMailboxes() {
       <tr class="${mbSelected.has(x.id) ? 'row-sel' : ''}">
         <td class="col-check"><input type="checkbox" ${mbSelected.has(x.id) ? 'checked' : ''} onclick="toggleSelect(${x.id}, this.checked)"></td>
         <td>${esc(x.email)}</td>
+        <td><span class="badge">${MB_SOURCE[x.source] || MB_SOURCE.local}</span></td>
         <td>${Number(x.register_count || 0)} / ${Number(x.register_limit || 0)}</td>
         <td>${fmtTime(x.created_at)}</td>
         <td><span class="badge ${esc(x.status)}">${MB_STATUS[x.status] || esc(x.status)}</span></td>

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"chatgpt-register/internal/codexreg"
-	"chatgpt-register/internal/models"
-	"chatgpt-register/internal/varymail"
+	"grok-register/internal/codexreg"
+	"grok-register/internal/models"
+	"grok-register/internal/varymail"
 )
 
 // runVarymail 用 vary.email 取件作为邮箱来源生产账号：
@@ -25,7 +25,7 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 	}
 	cli := varymail.New("", cfg.VarymailKey)
 
-	// 固定使用 chatgpt 服务，起始库存检查：给出友好提示，库存不足直接不跑。
+	// 固定使用 xAI 服务，起始库存检查：给出友好提示，库存不足直接不跑。
 	svc, _, err := cli.ServiceByName(ctx, varymail.DefaultServiceName)
 	if err != nil {
 		p.setMessage("varymail 连接失败：" + err.Error())
@@ -59,8 +59,8 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 			continue
 		}
 
-		// 购买一个邮箱（下单即扣费）。
-		pur, bal, err := cli.Buy(ctx, svc.ID)
+		// 先复用邮箱管理里已购、还没注册成功的 vary 邮箱，池里没有才下单买新的。
+		mb, err := p.claimVarymailBox(ctx, cli, svc.ID)
 		if err != nil {
 			switch {
 			case errors.Is(err, varymail.ErrOutOfStock):
@@ -84,17 +84,15 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 			continue
 		}
 
-		email := strings.TrimSpace(pur.Email)
+		email := mb.Email
 		if email == "" {
 			p.logf("✗ varymail 下单未返回邮箱，跳过")
 			continue
 		}
-		p.markInflight(email, 0)
-		p.logf("🛒 varymail 分配邮箱 %s（余额 %.2f）", mask(email), bal)
 
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(email string, purchaseID int) {
+		go func(mb models.Mailbox, email string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer func() {
@@ -112,7 +110,7 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 			}()
 			p.updateProgress()
 
-			if err := p.produceOneVarymail(ctx, cfg, cli, email, purchaseID); err != nil {
+			if err := p.produceOneVarymail(ctx, cfg, cli, mb); err != nil {
 				if errors.Is(err, codexreg.ErrAccountTaken) {
 					p.logf("⚠ %s 停用（%v），换下一个", mask(email), err)
 				} else {
@@ -125,7 +123,7 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 				p.logf("✓ %s 注册成功", mask(email))
 			}
 			p.updateProgress()
-		}(email, pur.ID)
+		}(mb, email)
 	}
 
 	wg.Wait()
@@ -140,11 +138,84 @@ func (p *Producer) runVarymail(ctx context.Context, target int, cfg Config) {
 	}
 }
 
-// produceOneVarymail 用 varymail 分配的邮箱注册一个 ChatGPT 账号。
-func (p *Producer) produceOneVarymail(ctx context.Context, cfg Config, cli *varymail.Client, email string, purchaseID int) error {
-	password := codexreg.GenPassword(16)
+// claimVarymailBox 领取一个 vary 邮箱：先复用邮箱管理里已购买、尚未注册成功且未失效的，
+// 池里没有可用的才向 vary.email 下单（下单即扣费），买到的邮箱也写进邮箱管理。
+func (p *Producer) claimVarymailBox(
+	ctx context.Context,
+	cli *varymail.Client,
+	serviceID int,
+) (models.Mailbox, error) {
+	p.claimMu.Lock()
+	defer p.claimMu.Unlock()
+
+	var pool []models.Mailbox
+	p.db.Where("source = ? AND vary_purchase_id > 0 AND status = ?",
+		models.MailboxSourceVarymail, "verified").Order("id asc").Find(&pool)
+	for _, mb := range pool {
+		if p.mailboxBusy(mb.ID) || p.isRegistered(mb.Email) {
+			continue
+		}
+		p.markInflight(mb.Email, mb.ID)
+		p.logf("♻ 复用已购 varymail 邮箱 %s（取件权 #%d）", mask(mb.Email), mb.VaryPurchaseID)
+		return mb, nil
+	}
+
+	pur, bal, err := cli.Buy(ctx, serviceID)
+	if err != nil {
+		return models.Mailbox{}, err
+	}
+	email := strings.TrimSpace(pur.Email)
+	if email == "" {
+		return models.Mailbox{}, nil
+	}
+	mb := models.Mailbox{
+		Email:          email,
+		Provider:       "varymail",
+		Source:         models.MailboxSourceVarymail,
+		VaryPurchaseID: pur.ID,
+		Status:         "verified",
+		Note:           "vary.email 购买",
+	}
+	var exist models.Mailbox
+	if err := p.db.Where("email = ?", email).First(&exist).Error; err == nil {
+		exist.Provider, exist.Source, exist.Status = mb.Provider, mb.Source, mb.Status
+		exist.VaryPurchaseID, exist.Note = mb.VaryPurchaseID, mb.Note
+		p.db.Save(&exist)
+		mb = exist
+	} else if err := p.db.Create(&mb).Error; err != nil {
+		return models.Mailbox{}, err
+	}
+	p.markInflight(mb.Email, mb.ID)
+	p.logf("🛒 varymail 购买邮箱 %s（取件权 #%d，余额 %.2f）", mask(email), pur.ID, bal)
+	return mb, nil
+}
+
+// markVarymailBoxInvalid 取件权取不到码时把邮箱标为失效，避免下次继续复用它。
+func (p *Producer) markVarymailBoxInvalid(mb models.Mailbox, reason string) {
+	if mb.ID == 0 {
+		return
+	}
+	p.db.Model(&models.Mailbox{}).Where("id = ?", mb.ID).
+		Updates(map[string]any{"status": "verify_failed", "note": reason})
+	p.logf("⚠ varymail 邮箱 %s 取件失败，已标记失效不再复用", mask(mb.Email))
+}
+
+// produceOneVarymail 用 varymail 分配的邮箱注册一个 Grok 账号。
+func (p *Producer) produceOneVarymail(
+	ctx context.Context,
+	cfg Config,
+	cli *varymail.Client,
+	mb models.Mailbox,
+) error {
+	email := mb.Email
+	purchaseID := mb.VaryPurchaseID
+	// 复用邮箱时沿用原密码，账号已建成时才能凭同一密码登录。
+	password := p.existingPassword(email)
+	if password == "" {
+		password = codexreg.GenPassword(16)
+	}
 	p.upsert(models.Registration{
-		Email: email, MailboxID: 0, Password: password,
+		Email: email, MailboxID: mb.ID, Password: password,
 		Status: "registering", IsMother: false, Note: "varymail",
 	})
 
@@ -158,6 +229,9 @@ func (p *Producer) produceOneVarymail(ctx context.Context, cfg Config, cli *vary
 		p.db.Model(&models.Registration{}).Where("email = ?", email).Update("log", snapshot)
 	}
 
+	// 提交邮箱前先记下当前最后一个验证码，之后只接受与它不同的新码。
+	baseline := latestCodeVarymail(ctx, cli, purchaseID)
+	codeTimeout := false
 	in := codexreg.Input{
 		Email:    email,
 		Password: password,
@@ -169,7 +243,11 @@ func (p *Producer) produceOneVarymail(ctx context.Context, cfg Config, cli *vary
 			p.logf("%s", "  "+mask(email)+" "+msg)
 		},
 		FetchCode: func(ctx context.Context) (string, error) {
-			return p.fetchCodeVarymail(ctx, cli, purchaseID)
+			code, err := p.fetchCodeVarymail(ctx, cli, purchaseID, baseline)
+			if errors.Is(err, errCodeTimeout) {
+				codeTimeout = true
+			}
+			return code, err
 		},
 		SaveShot: func(png []byte) {
 			p.db.Model(&models.Registration{}).Where("email = ?", email).Update("shot", png)
@@ -185,13 +263,16 @@ func (p *Producer) produceOneVarymail(ctx context.Context, cfg Config, cli *vary
 		}
 		appendLog("✗ 失败: " + err.Error())
 		p.setRegistrationFailed(email, err.Error(), logBuf.String())
+		if codeTimeout {
+			p.markVarymailBoxInvalid(mb, "vary 取件超时未收到验证码")
+		}
 		return err
 	}
 
 	appendLog("✓ 注册成功")
 	authBytes, _ := json.MarshalIndent(res.AuthJSON, "", "  ")
 	p.upsert(models.Registration{
-		Email: email, MailboxID: 0, Password: password,
+		Email: email, MailboxID: mb.ID, Password: password,
 		Status: "registered", IsMother: false, Note: "varymail",
 		AuthData: string(authBytes), AccountID: res.AccountID,
 		UserID: res.UserID, PlanType: res.PlanType, Log: logBuf.String(),
@@ -199,8 +280,21 @@ func (p *Producer) produceOneVarymail(ctx context.Context, cfg Config, cli *vary
 	return nil
 }
 
-// fetchCodeVarymail 轮询 varymail 取件接口，直到拿到验证码或超时。
-func (p *Producer) fetchCodeVarymail(ctx context.Context, cli *varymail.Client, purchaseID int) (string, error) {
+// errCodeTimeout 取件超时：邮箱可能已失效，不再复用。
+var errCodeTimeout = errors.New("超时未收到验证码")
+
+// existingPassword 读取该邮箱已有注册记录里的密码（复用邮箱时沿用，便于登录已建成的账号）。
+func (p *Producer) existingPassword(email string) string {
+	var reg models.Registration
+	if err := p.db.Select("password").Where("email = ?", email).First(&reg).Error; err != nil {
+		return ""
+	}
+	return strings.TrimSpace(reg.Password)
+}
+
+// fetchCodeVarymail 每 codePollInterval 轮询一次取件接口，
+// 直到拿到与 baseline 不同的新验证码或超时。
+func (p *Producer) fetchCodeVarymail(ctx context.Context, cli *varymail.Client, purchaseID int, baseline string) (string, error) {
 	deadline := time.Now().Add(codePollTimeout)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
@@ -212,8 +306,11 @@ func (p *Producer) fetchCodeVarymail(ctx context.Context, cli *varymail.Client, 
 			// 取件暂时失败，稍后重试
 		case err != nil:
 			return "", err
-		case hasMail && strings.TrimSpace(msg.Code) != "":
-			return strings.TrimSpace(msg.Code), nil
+		case hasMail:
+			// x.ai 的码形如 C1O-6KS，页面只接受去掉连字符的 6 位。
+			if code := normalizeCode(msg.Code); code != "" && code != baseline {
+				return code, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -221,6 +318,14 @@ func (p *Producer) fetchCodeVarymail(ctx context.Context, cli *varymail.Client, 
 		case <-time.After(codePollInterval):
 		}
 	}
-	return "", fmt.Errorf("超时未收到验证码")
+	return "", errCodeTimeout
 }
 
+// latestCodeVarymail 取当前已有的最后一个验证码（新邮箱通常为空），作为旧码基线。
+func latestCodeVarymail(ctx context.Context, cli *varymail.Client, purchaseID int) string {
+	msg, hasMail, err := cli.Code(ctx, purchaseID)
+	if err != nil || !hasMail {
+		return ""
+	}
+	return normalizeCode(msg.Code)
+}

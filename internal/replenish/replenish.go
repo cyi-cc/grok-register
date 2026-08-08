@@ -1,5 +1,5 @@
-// Package replenish 自动补号：定时把本地已注册的 ChatGPT 账号(access_token)
-// 推送到 image2api 账号池。每 30 秒查一次目标站存活的 openai 账号数，低于阈值
+// Package replenish 自动补号：定时把本地已注册的 Grok 账号(sso)
+// 推送到 image2api 账号池。每 30 秒查一次目标站存活的 grok 账号数，低于阈值
 // 就用未出库的已注册账号补足差额（下载/推送即出库，避免重复推）。
 //
 // 配置来自系统设置(key-value)，可随时在设置页开关/改阈值：
@@ -25,9 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"chatgpt-register/internal/browserboot"
-	"chatgpt-register/internal/models"
-	"chatgpt-register/internal/producer"
+	"grok-register/internal/browserboot"
+	"grok-register/internal/models"
+	"grok-register/internal/producer"
 
 	"gorm.io/gorm"
 )
@@ -107,7 +107,7 @@ func (s *Service) tick(ctx context.Context) {
 		return
 	}
 
-	// 现成可推的号：已注册、未出库、带 access_token。
+	// 现成可推的号：已注册、未出库、带 sso。
 	var ready int64
 	s.db.Model(&models.Registration{}).
 		Where("status = ? AND shipped = ? AND auth_data <> ''", "registered", false).
@@ -117,15 +117,12 @@ func (s *Service) tick(ctx context.Context) {
 	moreComing := s.prod != nil && s.prod.Snapshot().Running
 	if cfg["replenish_autoproduce"] == "1" && s.prod != nil {
 		if want := need - int(ready); want > 0 && !moreComing {
-			if s.browser != nil && s.browser.Ready() {
-				if err := s.prod.Start(want); err != nil {
-					log.Printf("补号：自动生产未启动：%v", err)
-				} else {
-					moreComing = true
-					log.Printf("补号：目标存活 %d < 阈值 %d、现成号 %d 不足，自动生产 %d 个", alive, threshold, ready, want)
-				}
+			// 注册走 python(nodriver) 自带浏览器，不再依赖 rod 的 Chromium 就绪状态。
+			if err := s.prod.Start(want); err != nil {
+				log.Printf("补号：自动生产未启动：%v", err)
 			} else {
-				log.Printf("补号：需自动生产但浏览器未就绪，跳过本轮")
+				moreComing = true
+				log.Printf("补号：目标存活 %d < 阈值 %d、现成号 %d 不足，自动生产 %d 个", alive, threshold, ready, want)
 			}
 		}
 	}
@@ -155,11 +152,11 @@ func (s *Service) tick(ctx context.Context) {
 
 	pushed := 0
 	for _, r := range regs {
-		tok := accessToken(r.AuthData)
-		if tok == "" {
+		sso := ssoCookie(r.AuthData)
+		if sso == "" {
 			continue
 		}
-		if err := s.importToken(ctx, base, user, pass, tok); err != nil {
+		if err := s.importSSO(ctx, base, user, pass, sso); err != nil {
 			log.Printf("补号：推送账号 #%d 失败：%v", r.ID, err)
 			continue
 		}
@@ -187,7 +184,7 @@ func (s *Service) settings() map[string]string {
 	return m
 }
 
-// aliveCount 查 image2api 存活的 openai 账号数。account 统计里 openai 含
+// aliveCount 查 image2api 存活的 grok 账号数。account 统计里 grok 含
 // n(总)/ok(正常)/dead(失效)/quota(限额)；存活 = 正常 + 待验证(刚推入的) = n-dead-quota，
 // 这样刚推进去还在 pending 的号也计入，避免 30 秒内重复补。
 func (s *Service) aliveCount(ctx context.Context, base, user, pass string) (int, error) {
@@ -202,18 +199,18 @@ func (s *Service) aliveCount(ctx context.Context, base, user, pass string) (int,
 	}
 	var out struct {
 		Stats struct {
-			Openai struct {
+			Grok struct {
 				N     int `json:"n"`
 				Ok    int `json:"ok"`
 				Dead  int `json:"dead"`
 				Quota int `json:"quota"`
-			} `json:"openai"`
+			} `json:"grok"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return 0, fmt.Errorf("解析响应失败：%w", err)
 	}
-	st := out.Stats.Openai
+	st := out.Stats.Grok
 	alive := st.N - st.Dead - st.Quota
 	if alive < 0 {
 		alive = 0
@@ -221,10 +218,10 @@ func (s *Service) aliveCount(ctx context.Context, base, user, pass string) (int,
 	return alive, nil
 }
 
-// importToken 把一个 access_token 推入 image2api 的 chatgpt 池。
-func (s *Service) importToken(ctx context.Context, base, user, pass, token string) error {
-	body, _ := json.Marshal(map[string]string{"access_token": token})
-	resp, err := s.authedRequest(ctx, base, user, pass, http.MethodPost, "/admin/api/tokens/import-chatgpt-token", body)
+// importSSO 把一个 sso cookie 推入 image2api 的 grok 池。
+func (s *Service) importSSO(ctx context.Context, base, user, pass, sso string) error {
+	body, _ := json.Marshal(map[string]string{"sso": sso})
+	resp, err := s.authedRequest(ctx, base, user, pass, http.MethodPost, "/admin/api/tokens/import-grok-token", body)
 	if err != nil {
 		return err
 	}
@@ -323,10 +320,10 @@ func (s *Service) login(ctx context.Context, base, user, pass string) (string, e
 	return out.Token, nil
 }
 
-// accessToken 从库里存的 auth.json 提取 access_token。
-func accessToken(authData string) string {
+// ssoCookie 从库里存的 auth.json 提取 sso cookie。
+func ssoCookie(authData string) string {
 	var parsed map[string]any
 	_ = json.Unmarshal([]byte(authData), &parsed)
-	s, _ := parsed["access_token"].(string)
+	s, _ := parsed["sso"].(string)
 	return s
 }

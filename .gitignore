@@ -2,3 +2,13 @@ adskull.db
 adskull-register
 adskull-register.exe
 dist/
+
+# build 产物 / 本地临时文件
+*.exe
+chatgpt-register-linux
+dist/
+__pycache__/
+_*.py
+_*.ps1
+_*.bin
+_*.json

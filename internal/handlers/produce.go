@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"chatgpt-register/internal/models"
+	"grok-register/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +18,14 @@ func accessToken(authData string) string {
 	return s
 }
 
+// ssoCookie 从库里存的 auth.json 提取 sso cookie。
+func ssoCookie(authData string) string {
+	var parsed map[string]any
+	_ = json.Unmarshal([]byte(authData), &parsed)
+	s, _ := parsed["sso"].(string)
+	return s
+}
+
 // Produce 启动一次生产：{ "count": N }。
 func (h *Handler) Produce(c *gin.Context) {
 	var in struct {
@@ -25,10 +33,6 @@ func (h *Handler) Produce(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if h.Browser == nil || !h.Browser.Ready() {
-		c.JSON(http.StatusConflict, gin.H{"error": "缺少浏览器，无法生产：浏览器正在下载或下载失败"})
 		return
 	}
 	if h.setting("email_source") == "varymail" {
@@ -98,7 +102,7 @@ func (h *Handler) SetShipped(c *gin.Context) {
 	c.JSON(http.StatusForbidden, gin.H{"error": "出库状态已锁定，只能由下载操作自动更新"})
 }
 
-// Download 导出选中账号的 access_token：纯文本，一行一个；下载即标记出库。
+// Download 导出选中账号的 sso：纯文本，一行一个；下载即标记出库。
 // 请求体：{ "ids": [1,2,3] }。
 func (h *Handler) Download(c *gin.Context) {
 	var in struct {
@@ -124,22 +128,22 @@ func (h *Handler) Download(c *gin.Context) {
 		return
 	}
 
-	tokens := make([]string, 0, len(regs))
+	ssos := make([]string, 0, len(regs))
 	ids := make([]uint, 0, len(regs))
 	for _, r := range regs {
-		if tok := accessToken(r.AuthData); tok != "" {
-			tokens = append(tokens, tok)
+		if sso := ssoCookie(r.AuthData); sso != "" {
+			ssos = append(ssos, sso)
 		}
 		ids = append(ids, r.ID)
 	}
-	if len(tokens) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "所选账号缺少 access_token"})
+	if len(ssos) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "所选账号缺少 sso"})
 		return
 	}
 
 	// 下载即出库
 	h.DB.Model(&models.Registration{}).Where("id IN ?", ids).Update("shipped", true)
 
-	c.Header("Content-Disposition", "attachment; filename=access_tokens.txt")
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(strings.Join(tokens, "\n")+"\n"))
+	c.Header("Content-Disposition", "attachment; filename=sso.txt")
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(strings.Join(ssos, "\n")+"\n"))
 }
