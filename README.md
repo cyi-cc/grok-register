@@ -115,8 +115,7 @@ chatgpt-register/
 │   ├── models/              # GORM 数据模型（Admin / Registration / Mailbox / Setting）
 │   └── producer/            # 批量注册调度器（并发控制）
 ├── pyreg/                   # python 注册脚本（nodriver）
-│   ├── grok_register.py     # 无头跑完 accounts.x.ai 注册，提取 sso
-│   └── export_sub2api.py    # 导出 sub2api-data JSON
+│   └── grok_register.py     # 无头跑完 accounts.x.ai 注册，提取 sso
 └── static/                  # 前端静态页面（嵌入二进制，无需 Web 服务器）
     ├── dashboard.html        # 仪表盘
     ├── accounts.html/js      # 账户管理
